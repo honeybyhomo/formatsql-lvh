@@ -6,14 +6,16 @@ const input = ref('')
 const output = ref('')
 const copied = ref(false)
 
+// Radio-based option groups. Each is a mutually-exclusive *style*.
 const options = reactive({
-  compact: true,
-  variabilize: true,
-  variabilizeAll: false,
-  simplifyDateFormat: true,
+  layout: 'perKeyword', // 'oneLine' | 'perKeyword' | 'perKeywordSub'
+  alignment: 'off', // 'off' (river) | 'aligned'
+  capitalization: 'unchanged', // 'unchanged' | 'keywords'
+  aliases: 'unchanged', // 'unchanged' | 'as' | 'bare'
+  variables: 'repeated', // 'none' | 'repeated' (>=2) | 'all'
 })
 
-const OPT_KEY = 'formatsql:options'
+const OPT_KEY = 'formatsql:options:v2'
 const INPUT_KEY = 'formatsql:input'
 
 onMounted(() => {
@@ -54,19 +56,21 @@ function copyOutput() {
 }
 
 function preset(name) {
-  if (name === 'all') {
+  if (name === 'pretty') {
     Object.assign(options, {
-      compact: true,
-      variabilize: true,
-      variabilizeAll: false,
-      simplifyDateFormat: true,
+      layout: 'perKeywordSub',
+      alignment: 'aligned',
+      capitalization: 'keywords',
+      aliases: 'as',
+      variables: 'repeated',
     })
-  } else if (name === 'none') {
+  } else if (name === 'reset') {
     Object.assign(options, {
-      compact: false,
-      variabilize: false,
-      variabilizeAll: false,
-      simplifyDateFormat: false,
+      layout: 'perKeyword',
+      alignment: 'off',
+      capitalization: 'unchanged',
+      aliases: 'unchanged',
+      variables: 'none',
     })
   }
 }
@@ -76,24 +80,46 @@ function preset(name) {
   <div class="app">
     <header class="topbar">
       <h1>FormatSQL</h1>
-      <span class="sub">compact · variabilize · simplify — for Google Sheets SQL</span>
+      <span class="sub">layout · alignment · case · aliases · variables — for Google Sheets SQL</span>
     </header>
 
     <section class="options">
-      <label><input type="checkbox" v-model="options.compact" /> Compact</label>
-      <label><input type="checkbox" v-model="options.variabilize" /> Variabilize (≥2×)</label>
-      <label :class="{ disabled: !options.variabilize }">
-        <input
-          type="checkbox"
-          v-model="options.variabilizeAll"
-          :disabled="!options.variabilize"
-        />
-        Variabilize all
-      </label>
-      <label><input type="checkbox" v-model="options.simplifyDateFormat" /> Simplify DATE_FORMAT</label>
+      <div class="opt-group">
+        <span class="opt-title">Layout</span>
+        <label><input type="radio" value="oneLine" v-model="options.layout" /> Single line</label>
+        <label><input type="radio" value="perKeyword" v-model="options.layout" /> Keywords / line</label>
+        <label><input type="radio" value="perKeywordSub" v-model="options.layout" /> + Subqueries</label>
+      </div>
+
+      <div class="opt-group">
+        <span class="opt-title">Alignment</span>
+        <label><input type="radio" value="off" v-model="options.alignment" /> River</label>
+        <label><input type="radio" value="aligned" v-model="options.alignment" /> Aligned</label>
+      </div>
+
+      <div class="opt-group">
+        <span class="opt-title">Case</span>
+        <label><input type="radio" value="unchanged" v-model="options.capitalization" /> Unchanged</label>
+        <label><input type="radio" value="keywords" v-model="options.capitalization" /> Keywords</label>
+      </div>
+
+      <div class="opt-group">
+        <span class="opt-title">Aliases</span>
+        <label><input type="radio" value="unchanged" v-model="options.aliases" /> Unchanged</label>
+        <label><input type="radio" value="as" v-model="options.aliases" /> With AS</label>
+        <label><input type="radio" value="bare" v-model="options.aliases" /> Without AS</label>
+      </div>
+
+      <div class="opt-group">
+        <span class="opt-title">Variables</span>
+        <label><input type="radio" value="none" v-model="options.variables" /> None</label>
+        <label><input type="radio" value="repeated" v-model="options.variables" /> Repeated ≥2</label>
+        <label><input type="radio" value="all" v-model="options.variables" /> All</label>
+      </div>
+
       <span class="presets">
-        <button @click="preset('all')">All</button>
-        <button @click="preset('none')">Reset</button>
+        <button @click="preset('pretty')">Pretty</button>
+        <button @click="preset('reset')">Reset</button>
       </span>
     </section>
 
@@ -128,6 +154,7 @@ function preset(name) {
   display: flex;
   align-items: baseline;
   gap: 12px;
+  flex-wrap: wrap;
 }
 .topbar h1 {
   font-size: 18px;
@@ -143,31 +170,40 @@ function preset(name) {
 .options {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 10px 20px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 14px;
 }
-.options label {
+.opt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.opt-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+.opt-group label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
   color: var(--text);
+  font-size: 13px;
 }
-.options label.disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.options input[type='checkbox'] {
+.opt-group input[type='radio'] {
   accent-color: var(--accent);
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
 }
 .presets {
   margin-left: auto;
+  align-self: flex-start;
   display: flex;
   gap: 8px;
 }

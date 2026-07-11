@@ -5,18 +5,18 @@
 // transforms, and writes the result to stdout AND the clipboard.
 //
 // Usage:
-//   pbpaste | node tools/prettify-sql.mjs --all
-//   node tools/prettify-sql.mjs --all            # reads clipboard, writes clipboard
-//   echo "SELECT *  FROM  t" | node tools/prettify-sql.mjs --compact
+//   pbpaste | node tools/prettify-sql.mjs --pretty
+//   node tools/prettify-sql.mjs --pretty          # reads clipboard, writes clipboard
+//   echo "select *  from  t" | node tools/prettify-sql.mjs
 //
-// Transforms (all off by default except --compact):
-//   --compact              collapse whitespace; one statement per line (default on)
-//   --keep-newlines        don't compact (preserve your line breaks)
-//   --variabilize          hoist {{ref|fmt}} used >=2x into SET @var = ...;
-//   --variabilize-all      hoist every {{ref|fmt}} (even single-use)
-//   --simplify-dateformat  DATE_FORMAT(x,'%Y-%m-%d') -> DATE(x)
-//                          (safe once the API formats DATE columns cleanly)
-//   --all                  compact + variabilize + simplify-dateformat
+// Options (defaults: single-line layout, everything else off):
+//   --one-line / --per-keyword / --per-keyword-sub   layout style
+//   --aligned                          pad clause keywords so columns align
+//   --keywords                         uppercase SQL keywords (+ function names)
+//   --as / --no-as                     enforce / strip column & table aliases
+//   --variables repeated|all           hoist {{ref|fmt}} into SET @var = ...
+//   --pretty                           convenience: per-keyword-sub + aligned +
+//                                      keywords + as + variables repeated
 //
 // The pure transform logic lives in web/src/lib/prettify.js and is shared
 // with the web app (formatsql.lvh.dev).
@@ -26,12 +26,31 @@ import { prettify } from '../web/src/lib/prettify.js';
 
 // ---------- flag parsing ----------
 const argv = process.argv.slice(2);
-const opts = {
-  compact: !argv.includes('--keep-newlines'),
-  variabilize: argv.includes('--variabilize') || argv.includes('--variabilize-all') || argv.includes('--all'),
-  variabilizeAll: argv.includes('--variabilize-all'),
-  simplifyDateFormat: argv.includes('--simplify-dateformat') || argv.includes('--all'),
+const has = (f) => argv.includes(f);
+const val = (f) => {
+  const i = argv.indexOf(f);
+  return i >= 0 ? argv[i + 1] : undefined;
 };
+
+const opts = has('--pretty')
+  ? {
+      layout: 'perKeywordSub',
+      alignment: 'aligned',
+      capitalization: 'keywords',
+      aliases: 'as',
+      variables: 'repeated',
+    }
+  : {
+      layout: has('--per-keyword-sub')
+        ? 'perKeywordSub'
+        : has('--per-keyword')
+          ? 'perKeyword'
+          : 'oneLine',
+      alignment: has('--aligned') ? 'aligned' : 'off',
+      capitalization: has('--keywords') ? 'keywords' : 'unchanged',
+      aliases: has('--no-as') ? 'bare' : has('--as') ? 'as' : 'unchanged',
+      variables: val('--variables') === 'all' ? 'all' : val('--variables') === 'repeated' ? 'repeated' : 'none',
+    };
 
 // ---------- I/O ----------
 function readInput() {

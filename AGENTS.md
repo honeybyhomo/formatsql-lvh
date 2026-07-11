@@ -57,18 +57,29 @@ formatsql-lvh/
 Pure functions, no Node-specific imports → safe for the browser. Shared by the
 Vue app and the CLI. **Change transforms here once; both surfaces update.**
 
+Pipeline: `splitStatements → variabilize → tokenize → capitalize → aliases →
+layout`. A small SQL **tokenizer** (quote / paren / comment / `{{placeholder}}`
+/ `@param` aware) powers everything; whitespace is dropped and re-flowed by
+the renderers, so clause analysis never skips spaces.
+
 - `splitStatements(sql)` — quote-aware split on `;`.
-- `compactStatement(stmt)` — collapse whitespace (quote-aware), one line.
-- `simplifyDateFormat(stmt)` — `DATE_FORMAT(x,'%Y-%m-%d')` → `DATE(x)`
-  (paren/quote-aware, word-boundary guarded; only the exact `%Y-%m-%d` format).
+- `tokenize(sql)` → significant tokens (strings, backticks, placeholders,
+  `@params`, comments, words, ops); whitespace is dropped.
+- `clauseRanges(tokens)` — splits a statement at depth-0 clause keywords
+  (`SELECT`, `FROM`, `JOIN…`, `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`,
+  `LIMIT`, `UNION [ALL]`, …). Multi-word phrases are matched as a unit.
 - `variabilize(statements, threshold)` — hoist `{{ref|fmt}}` used ≥ threshold
   times into `SET @var = …;` (snake_case var name from the ref).
-- `prettify(sql, opts)` — orchestrator. `opts: { compact, variabilize,
-  variabilizeAll, simplifyDateFormat }`. Note: locals are named `do*` to avoid
-  shadowing the transform functions of the same name.
+- `prettify(sql, opts)` — orchestrator.
+  `opts: { layout, alignment, capitalization, aliases, variables }` (see
+  `UI Conventions` below for the values of each). Defaults: `perKeyword` /
+  `off` / `unchanged` / `unchanged` / `none`.
 
 All transforms are quote- **and** paren-aware, so `;`, `DATE_FORMAT`, and
 whitespace inside string literals are never touched.
+
+> The old `compactStatement` / `simplifyDateFormat` (DATE_FORMAT → DATE())
+> transforms were removed. DATE_FORMAT is now always left untouched.
 
 ## Build / Dev Commands
 
@@ -83,28 +94,43 @@ npm run preview    # serve the production build locally
 CLI (clipboard in/out):
 
 ```bash
-node tools/prettify-sql.mjs --all        # compact + variabilize + simplify-dateformat
-node tools/prettify-sql.mjs --compact    # just compact
+node tools/prettify-sql.mjs --pretty                    # layout + align + case + as + vars
+node tools/prettify-sql.mjs --per-keyword-sub --aligned  # pick options à la carte
 ```
 
 ## Verification (before marking work done)
 
 - `cd web && npm run build` succeeds and produces `dist/`.
 - `node --check` on any changed `.js`/`.mjs`.
-- Exercise the transforms via the CLI on a sample containing `{{x|date}}` twice
-  + a `DATE_FORMAT(...)`, plus edge cases (string literals, `XDATE_FORMAT(`
-  word boundary, non-`%Y-%m-%d` formats must be left alone).
+- Exercise the transforms via a quick `node --input-type=module -e` import of
+  `prettify` (or the CLI) on a sample with a subquery, a `{{x|date}}` used
+  twice, and aliases. Edge cases to check: string literals (incl. `;` inside),
+  `XDATE_FORMAT(` word boundary, `t.*`, `COUNT(*)`, `WHERE (`, `DISTINCT col`
+  (no false alias), arithmetic like `n - 1` (no false alias), idempotency of
+  the `as` alias mode, and that `perKeywordSub` indents subqueries.
 
-## UI Conventions (for upcoming options)
+## UI Conventions
 
-The user plans to add many more options. Follow this control-per-type pattern:
+Options are grouped radio sections (mutually-exclusive *styles*), plus preset
+buttons. Each group maps 1:1 to a field of the `prettify` `opts` object:
 
-- **Checkboxes** → independent on/off transforms (`compact`, `variabilize`, …).
-- **Radio buttons / dropdown** → mutually-exclusive *styles* (e.g. output mode).
-- **Buttons** → one-shot actions and presets (`All`, `Reset`, `Copy`).
-- Group options with section headers; persist selection + last input to
-  `localStorage` (already implemented for the current set).
-- Transform runs **live** (debounced `watch` on input + options).
+- **Layout** → `layout`: `oneLine` (single line) · `perKeyword` (each clause
+  keyword on its own line) · `perKeywordSub` (same, plus `(SELECT …)`
+  subqueries broken & indented).
+- **Alignment** → `alignment`: `off` (one space after the keyword, "river") ·
+  `aligned` (pad keyword phrases so the following content left-aligns).
+- **Case** → `capitalization`: `unchanged` · `keywords` (uppercase keywords
+  and function-call names).
+- **Aliases** → `aliases`: `unchanged` · `as` (ensure `AS`, best-effort) ·
+  `bare` (strip `AS`). Alias detection is a heuristic on SELECT-list items and
+  FROM/JOIN table refs; it refuses to guess after operators, after `DISTINCT`,
+  on single tokens, or where `AS` is already present.
+- **Variables** → `variables`: `none` · `repeated` (≥2 uses) · `all`.
+- **Buttons** → presets (`Pretty`, `Reset`) and click-to-copy on the output.
+
+Selection + last input are persisted to `localStorage` under
+`formatsql:options:v2` / `formatsql:input`. The transform runs **live**
+(debounced `watch` on input + options).
 
 ## Font
 

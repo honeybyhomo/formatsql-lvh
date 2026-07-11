@@ -1,9 +1,441 @@
 // Pure SQL transform functions shared by the CLI (tools/prettify-sql.mjs)
 // and the web app (formatsql.lvh.dev). No Node-specific imports — safe for
 // the browser.
+//
+// Pipeline: splitStatements → variabilize → tokenize → capitalize → aliases
+// → layout (one-line | keywords-per-line | keywords-per-line + subqueries),
+// with optional alignment, all quote/paren/comment/placeholder aware.
 
-// Quote characters we track so transforms don't touch string literals/identifiers.
-const QUOTES = "'\"`";
+// ---------------------------------------------------------------------------
+// Keyword sets
+// ---------------------------------------------------------------------------
+
+// Words uppercased when capitalization === 'keywords'. Conservative — only
+// clear SQL keywords. Column/function names written as reserved words without
+// quoting would also be uppercased, but that's rare in the GS queries.
+const KEYWORDS = new Set([
+  'select', 'from', 'where', 'group', 'by', 'having', 'order', 'limit', 'offset',
+  'join', 'inner', 'left', 'right', 'full', 'cross', 'outer', 'natural', 'straight_join',
+  'on', 'using', 'union', 'intersect', 'except', 'all', 'distinct', 'with',
+  'and', 'or', 'not', 'in', 'is', 'null', 'like', 'between', 'exists', 'any', 'some',
+  'as', 'case', 'when', 'then', 'else', 'end', 'asc', 'desc', 'set', 'into', 'values', 'insert',
+]);
+
+function isKeyword(w) {
+  return KEYWORDS.has(String(w).toLowerCase());
+}
+
+// Does a word token look like a bare alias? (pure identifier, not a keyword,
+// or a backticked identifier)
+function isAliasWord(t) {
+  if (!t) return false;
+  if (t.type === 'backtick') return true;
+  if (t.type === 'word') {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(t.value) && !KEYWORDS.has(t.value.toLowerCase());
+  }
+  return false;
+}
+
+const INDENT = '  ';
+const indentFn = (n) => INDENT.repeat(n);
+
+// ---------------------------------------------------------------------------
+// Tokenizer
+// ---------------------------------------------------------------------------
+
+// Split SQL into "significant" tokens. Whitespace is dropped (the renderers
+// re-flow spacing), so clause analysis never has to skip spaces. Strings,
+// backticks, {{placeholders}}, @params and comments are kept as opaque tokens
+// so their contents are never mangled.
+function tokenize(sql) {
+  const tokens = [];
+  let i = 0;
+  const n = sql.length;
+  const isWord = (c) => /[A-Za-z0-9_$]/.test(c) || c === '.';
+
+  while (i < n) {
+    const c = sql[i];
+
+    // whitespace — dropped
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+
+    // {{ref|fmt}} placeholder (kept verbatim for the GS API)
+    if (c === '{' && sql[i + 1] === '{') {
+      const end = sql.indexOf('}}', i + 2);
+      const stop = end === -1 ? n : end + 2;
+      tokens.push({ type: 'placeholder', value: sql.slice(i, stop) });
+      i = stop;
+      continue;
+    }
+
+    // line comment -- ... or # ...
+    if ((c === '-' && sql[i + 1] === '-') || c === '#') {
+      let j = i + (c === '#' ? 1 : 2);
+      while (j < n && sql[j] !== '\n') j++;
+      tokens.push({ type: 'comment', value: sql.slice(i, j) });
+      i = j;
+      continue;
+    }
+
+    // block comment /* ... */
+    if (c === '/' && sql[i + 1] === '*') {
+      let j = i + 2;
+      while (j < n && !(sql[j] === '*' && sql[j + 1] === '/')) j++;
+      j = Math.min(n, j + 2);
+      tokens.push({ type: 'comment', value: sql.slice(i, j) });
+      i = j;
+      continue;
+    }
+
+    // string literal '...' or "..." (escaped via doubling)
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < n) {
+        if (sql[j] === c) {
+          if (sql[j + 1] === c) { j += 2; continue; }
+          j++; break;
+        }
+        j++;
+      }
+      tokens.push({ type: 'string', value: sql.slice(i, Math.min(j, n)) });
+      i = Math.min(j, n);
+      continue;
+    }
+
+    // backtick identifier `...`
+    if (c === '`') {
+      let j = i + 1;
+      while (j < n && sql[j] !== '`') j++;
+      j = Math.min(n, j + 1);
+      tokens.push({ type: 'backtick', value: sql.slice(i, j) });
+      i = j;
+      continue;
+    }
+
+    // @param
+    if (c === '@') {
+      let j = i + 1;
+      while (j < n && /[A-Za-z0-9_$]/.test(sql[j])) j++;
+      if (j > i + 1) {
+        tokens.push({ type: 'param', value: sql.slice(i, j) });
+        i = j;
+        continue;
+      }
+      tokens.push({ type: 'op', value: c });
+      i++;
+      continue;
+    }
+
+    // word / number / qualified name (a.b.c)
+    if (isWord(c)) {
+      let j = i + 1;
+      while (j < n && isWord(sql[j])) j++;
+      tokens.push({ type: 'word', value: sql.slice(i, j) });
+      i = j;
+      continue;
+    }
+
+    // multi-char operators
+    const two = sql.slice(i, i + 2);
+    if (two === '<=' || two === '>=' || two === '<>' || two === '!=' ||
+        two === '||' || two === '&&' || two === '::' || two === ':=') {
+      tokens.push({ type: 'op', value: two });
+      i += 2;
+      continue;
+    }
+
+    tokens.push({ type: 'op', value: c });
+    i++;
+  }
+  return tokens;
+}
+
+// ---------------------------------------------------------------------------
+// Clause segmentation
+// ---------------------------------------------------------------------------
+
+// Given tokens and an index pointing at a 'word' token, return how many word
+// tokens form the clause-leading phrase at that position (0 = not a clause
+// start). Handles multi-word phrases: GROUP BY, ORDER BY, UNION [ALL],
+// [NATURAL] [INNER|LEFT|RIGHT|FULL|CROSS] [OUTER] JOIN.
+function matchClausePhrase(tokens, i) {
+  const word = (idx) => idx < tokens.length && tokens[idx].type === 'word'
+    ? tokens[idx].value.toLowerCase() : null;
+  const w0 = word(i);
+  if (!w0) return 0;
+
+  if ((w0 === 'group' || w0 === 'order') && word(i + 1) === 'by') return 2;
+  if (w0 === 'union') return word(i + 1) === 'all' ? 2 : 1;
+  if (w0 === 'join' || w0 === 'straight_join') return 1;
+  if (['select', 'from', 'where', 'having', 'limit', 'offset',
+       'intersect', 'except'].includes(w0)) return 1;
+
+  // joins with a leading modifier
+  if (['inner', 'left', 'right', 'full', 'cross', 'natural'].includes(w0)) {
+    let k = i + 1;
+    if (word(k) === 'outer') k++;
+    if (word(k) === 'join') return k - i + 1;
+  }
+  return 0;
+}
+
+// Split a statement's tokens into clause ranges (depth-0 keyword boundaries).
+// Each range: { headStart, headLen, bodyStart, bodyEnd } in original indices.
+function clauseRanges(tokens) {
+  const ranges = [];
+  const n = tokens.length;
+  let i = 0;
+  while (i < n) {
+    const headLen = tokens[i] && tokens[i].type === 'word' ? matchClausePhrase(tokens, i) : 0;
+    const bodyStart = i + headLen;
+    let depth = 0;
+    let j = bodyStart;
+    while (j < n) {
+      const v = tokens[j].value;
+      if (v === '(') depth++;
+      else if (v === ')') depth--;
+      else if (depth === 0 && tokens[j].type === 'word' && matchClausePhrase(tokens, j) > 0) break;
+      j++;
+    }
+    ranges.push({ headStart: i, headLen, bodyStart, bodyEnd: j });
+    i = j;
+  }
+  return ranges;
+}
+
+// Find the index of the ')' matching the '(' at openIdx.
+function matchingClose(tokens, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < tokens.length; i++) {
+    const v = tokens[i].value;
+    if (v === '(') depth++;
+    else if (v === ')') { depth--; if (depth === 0) return i; }
+  }
+  return openIdx; // unmatched — fallback
+}
+
+// Is the '(' at i the start of a (SELECT ...) / (WITH ...) subquery?
+function isOpenSubquery(tokens, i) {
+  if (tokens[i].value !== '(') return false;
+  const next = tokens[i + 1];
+  return !!next && next.type === 'word' &&
+    (next.value.toLowerCase() === 'select' || next.value.toLowerCase() === 'with');
+}
+
+// Split [s, e) by top-level commas (depth-aware). Returns [start, end) ranges.
+function splitCommaRanges(tokens, s, e) {
+  const ranges = [];
+  let depth = 0;
+  let start = s;
+  for (let i = s; i < e; i++) {
+    const v = tokens[i].value;
+    if (v === '(') depth++;
+    else if (v === ')') depth--;
+    else if (v === ',' && depth === 0) { ranges.push([start, i]); start = i + 1; }
+  }
+  if (start < e || ranges.length === 0) ranges.push([start, e]);
+  return ranges;
+}
+
+// ---------------------------------------------------------------------------
+// Spacing
+// ---------------------------------------------------------------------------
+
+// Should there be a space between two adjacent significant tokens?
+function needSpace(prev, next) {
+  if (!prev) return false;
+  const p = prev.value;
+  const nx = next.value;
+  if (p === '(') return false;
+  if (nx === ')' || nx === ',' || nx === ';') return false;
+  if (nx === '.' || p === '.') return false;
+  if (p === '::' || nx === '::') return false;
+  // table.* — no space before the star
+  if (nx === '*' && p.endsWith('.')) return false;
+  // function call: word immediately followed by '(' — no space, unless the
+  // word is a keyword (WHERE (, IN (, ON (, …)
+  if (nx === '(' && prev.type === 'word') return isKeyword(prev.value);
+  return true;
+}
+
+function renderInline(tokens) {
+  let out = '';
+  let prev = null;
+  for (const t of tokens) {
+    if (needSpace(prev, t)) out += ' ';
+    out += t.value;
+    prev = t;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Transforms (operate on token arrays)
+// ---------------------------------------------------------------------------
+
+// capitalization: 'unchanged' | 'keywords' (keywords + function-call names)
+function applyCapitalization(tokens, mode) {
+  if (mode !== 'keywords') return tokens;
+  return tokens.map((t, i) => {
+    if (t.type !== 'word') return t;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(t.value)) return t; // skip qualified/numeric
+    if (KEYWORDS.has(t.value.toLowerCase())) return { ...t, value: t.value.toUpperCase() };
+    const next = tokens[i + 1];
+    if (next && next.value === '(') return { ...t, value: t.value.toUpperCase() }; // function call
+    return t;
+  });
+}
+
+// Index of a trailing alias in a SELECT-list item spanning [s, e), or -1.
+function aliasCandidateAt(tokens, s, e) {
+  const last = e - 1;
+  if (last < s) return -1;
+  const lt = tokens[last];
+  if (!isAliasWord(lt)) return -1;
+  if (last - 1 < s) return -1; // single token — just a column, no alias
+  const pt = tokens[last - 1];
+  if (pt.type === 'word' && pt.value.toLowerCase() === 'as') return -1; // already AS
+  const operandTerm = (pt.type === 'word' && !KEYWORDS.has(pt.value.toLowerCase())) ||
+    pt.type === 'string' || pt.type === 'backtick' ||
+    pt.type === 'placeholder' || pt.type === 'param' || pt.value === ')';
+  return operandTerm ? last : -1;
+}
+
+// Index of a table alias inside a FROM/JOIN body [s, e), or -1.
+function tableAliasIndex(tokens, s, e) {
+  if (s >= e) return -1;
+  if (tokens[s].value === '(') {
+    const close = matchingClose(tokens, s);
+    const k = close + 1;
+    if (k < e && isAliasWord(tokens[k])) return k;
+    return -1;
+  }
+  if (tokens[s].type === 'word') {
+    const k = s + 1;
+    if (k < e && tokens[k].type === 'word' && tokens[k].value.toLowerCase() === 'as') return -1;
+    if (k < e && isAliasWord(tokens[k])) return k;
+  }
+  return -1;
+}
+
+// Recursively collect alias-insertion positions (original-array indices) across
+// the whole statement, descending into (SELECT …) subqueries. `base` is the
+// original-array index of tokens[0].
+function collectAliasPositions(tokens, set, base) {
+  for (const r of clauseRanges(tokens)) {
+    const headWord = tokens[r.headStart] && tokens[r.headStart].value.toLowerCase();
+    const headLastIdx = r.headStart + r.headLen - 1;
+    const isJoin = r.headLen > 0 && tokens[headLastIdx] && tokens[headLastIdx].value.toLowerCase() === 'join';
+
+    if (headWord === 'select') {
+      for (const [s, e] of splitCommaRanges(tokens, r.bodyStart, r.bodyEnd)) {
+        const idx = aliasCandidateAt(tokens, s, e);
+        if (idx >= 0) set.add(base + idx);
+      }
+    } else if (headWord === 'from' || isJoin) {
+      const items = headWord === 'from'
+        ? splitCommaRanges(tokens, r.bodyStart, r.bodyEnd)
+        : [[r.bodyStart, r.bodyEnd]];
+      for (const [s, e] of items) {
+        const idx = tableAliasIndex(tokens, s, e);
+        if (idx >= 0) set.add(base + idx);
+      }
+    }
+  }
+
+  // descend into subqueries (handles nesting at any depth)
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].value === '(' && isOpenSubquery(tokens, i)) {
+      const close = matchingClose(tokens, i);
+      collectAliasPositions(tokens.slice(i + 1, close), set, base + i + 1);
+      i = close;
+    }
+  }
+}
+
+// aliases: 'unchanged' | 'as' (ensure AS) | 'bare' (strip AS). Best-effort.
+function applyAliases(tokens, mode) {
+  if (mode === 'bare') {
+    return tokens.filter((t) => !(t.type === 'word' && t.value.toLowerCase() === 'as'));
+  }
+  if (mode !== 'as') return tokens;
+
+  const insertAt = new Set();
+  collectAliasPositions(tokens, insertAt, 0);
+
+  if (!insertAt.size) return tokens;
+  const out = tokens.slice();
+  for (const p of [...insertAt].sort((a, b) => b - a)) {
+    out.splice(p, 0, { type: 'word', value: 'AS' });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+// Render a clause body. In perKeywordSub mode, (SELECT…) subqueries expand to
+// indented, keyword-broken blocks; otherwise everything stays inline.
+function renderSegmentBody(body, mode, indentLevel, alignment) {
+  if (mode !== 'perKeywordSub') return renderInline(body);
+
+  let out = '';
+  let prev = null;
+  let i = 0;
+  const n = body.length;
+  while (i < n) {
+    const t = body[i];
+    if (t.value === '(' && isOpenSubquery(body, i)) {
+      const close = matchingClose(body, i);
+      const inner = body.slice(i + 1, close);
+      if (needSpace(prev, t)) out += ' ';
+      out += '(\n' +
+        renderLayout(inner, mode, indentLevel + 1, alignment) + '\n' +
+        indentFn(indentLevel) + ')';
+      prev = { type: 'op', value: ')' };
+      i = close + 1;
+      continue;
+    }
+    if (needSpace(prev, t)) out += ' ';
+    out += t.value;
+    prev = t;
+    i++;
+  }
+  return out;
+}
+
+// Render a block (one statement, or a subquery body) broken by clause keyword.
+function renderLayout(tokens, mode, indentLevel, alignment) {
+  const ranges = clauseRanges(tokens);
+  const lines = ranges.map((r) => {
+    const headStr = r.headLen > 0
+      ? tokens.slice(r.headStart, r.headStart + r.headLen).map((t) => t.value).join(' ')
+      : '';
+    const body = tokens.slice(r.bodyStart, r.bodyEnd);
+    return { headStr, tailStr: renderSegmentBody(body, mode, indentLevel, alignment) };
+  });
+
+  const headLens = lines.filter((l) => l.headStr).map((l) => l.headStr.length);
+  const maxHead = headLens.length ? Math.max(...headLens) : 0;
+  const pad = indentFn(indentLevel);
+
+  return lines.map((l) => {
+    if (l.headStr) {
+      const h = alignment === 'aligned' ? l.headStr.padEnd(maxHead) : l.headStr;
+      const sep = l.tailStr ? ' ' : '';
+      return pad + h + sep + l.tailStr;
+    }
+    return pad + l.tailStr;
+  }).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Statement-level transforms
+// ---------------------------------------------------------------------------
 
 // Split a SQL string into statements on ';' (quote-aware). Empty pieces dropped.
 export function splitStatements(sql) {
@@ -17,7 +449,7 @@ export function splitStatements(sql) {
       if (c === quote) quote = null;
       continue;
     }
-    if (QUOTES.includes(c)) { quote = c; buf += c; continue; }
+    if (c === "'" || c === '"' || c === '`') { quote = c; buf += c; continue; }
     if (c === ';') {
       const s = buf.trim();
       if (s) stmts.push(s);
@@ -29,106 +461,6 @@ export function splitStatements(sql) {
   const last = buf.trim();
   if (last) stmts.push(last);
   return stmts;
-}
-
-// Collapse runs of whitespace to a single space (quote-aware), one line.
-export function compactStatement(stmt) {
-  let out = '';
-  let quote = null;
-  let wantSpace = false;
-  for (let i = 0; i < stmt.length; i++) {
-    const c = stmt[i];
-    if (quote) {
-      out += c;
-      if (c === quote) quote = null;
-      continue;
-    }
-    if (QUOTES.includes(c)) {
-      if (wantSpace) { out += ' '; wantSpace = false; }
-      quote = c;
-      out += c;
-      continue;
-    }
-    if (/\s/.test(c)) {
-      if (out.length > 0) wantSpace = true;
-      continue;
-    }
-    if (wantSpace) { out += ' '; wantSpace = false; }
-    out += c;
-  }
-  return out.trim();
-}
-
-// Split a function-argument string on top-level commas (quote/paren aware).
-function splitTopLevelComma(s) {
-  const parts = [];
-  let buf = '';
-  let depth = 0;
-  let quote = null;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (quote) { buf += c; if (c === quote) quote = null; continue; }
-    if (QUOTES.includes(c)) { quote = c; buf += c; continue; }
-    if (c === '(') { depth++; buf += c; continue; }
-    if (c === ')') { depth--; buf += c; continue; }
-    if (c === ',' && depth === 0) { parts.push(buf); buf = ''; continue; }
-    buf += c;
-  }
-  parts.push(buf);
-  return parts;
-}
-
-// DATE_FORMAT(expr, '%Y-%m-%d') -> DATE(expr). Quote- and paren-aware; only
-// matches the keyword at a word boundary so XDATE_FORMAT( is left alone.
-export function simplifyDateFormat(stmt) {
-  let out = '';
-  let i = 0;
-  let quote = null;
-  while (i < stmt.length) {
-    const c = stmt[i];
-    if (quote) {
-      out += c;
-      if (c === quote) quote = null;
-      i++;
-      continue;
-    }
-    if (QUOTES.includes(c)) { quote = c; out += c; i++; continue; }
-
-    const prevChar = i > 0 ? stmt[i - 1] : '';
-    const wordBoundary = !/[A-Za-z0-9_]/.test(prevChar);
-    const m = wordBoundary ? /^DATE_FORMAT\s*\(/i.exec(stmt.slice(i)) : null;
-
-    if (m) {
-      const openParen = i + m[0].length - 1;
-      let depth = 1;
-      let k = openParen + 1;
-      let q = null;
-      while (k < stmt.length && depth > 0) {
-        const cc = stmt[k];
-        if (q) { if (cc === q) q = null; k++; continue; }
-        if (QUOTES.includes(cc)) { q = cc; k++; continue; }
-        if (cc === '(') { depth++; k++; continue; }
-        if (cc === ')') { depth--; if (depth === 0) break; k++; continue; }
-        k++;
-      }
-      if (depth === 0) {
-        const args = stmt.slice(openParen + 1, k);
-        const parts = splitTopLevelComma(args);
-        if (parts.length === 2) {
-          const expr = parts[0].trim();
-          const fmt = parts[1].trim().replace(/^['"`]|['"`]$/g, '');
-          if (fmt === '%Y-%m-%d') {
-            out += 'DATE(' + expr + ')';
-            i = k + 1;
-            continue;
-          }
-        }
-      }
-    }
-    out += c;
-    i++;
-  }
-  return out;
 }
 
 // Derive a snake_case MySQL variable name from a placeholder ref.
@@ -183,35 +515,41 @@ export function variabilize(statements, threshold) {
   return { statements: out, setStmts };
 }
 
-// Orchestrator: apply the selected transforms to a SQL string.
-// opts: { compact, variabilize, variabilizeAll, simplifyDateFormat }
+// ---------------------------------------------------------------------------
+// Orchestrator
+// ---------------------------------------------------------------------------
+
+// opts: {
+//   layout:         'oneLine' | 'perKeyword' | 'perKeywordSub',  // default perKeyword
+//   alignment:      'off' | 'aligned',                            // default off
+//   capitalization: 'unchanged' | 'keywords',                     // default unchanged
+//   aliases:        'unchanged' | 'as' | 'bare',                  // default unchanged
+//   variables:      'none' | 'repeated' | 'all',                  // default none
+// }
 export function prettify(sql, opts = {}) {
-  // Locals are prefixed do* to avoid shadowing the transform functions of the
-  // same name (variabilize, simplifyDateFormat).
-  const doCompact = opts.compact !== false; // default true
-  const doVariabilize = !!opts.variabilize;
-  const variabilizeAll = !!opts.variabilizeAll;
-  const doSimplify = !!opts.simplifyDateFormat;
+  const layout = opts.layout || 'perKeyword';
+  const alignment = opts.alignment || 'off';
+  const capitalization = opts.capitalization || 'unchanged';
+  const aliases = opts.aliases || 'unchanged';
+  const variables = opts.variables || 'none';
 
   let stmts = splitStatements(sql);
 
-  if (doSimplify) {
-    stmts = stmts.map(simplifyDateFormat);
-  }
-
   let setStmts = [];
-  if (doVariabilize) {
-    const threshold = variabilizeAll ? 1 : 2;
+  if (variables === 'repeated' || variables === 'all') {
+    const threshold = variables === 'all' ? 1 : 2;
     const v = variabilize(stmts, threshold);
     stmts = v.statements;
     setStmts = v.setStmts;
   }
 
-  if (doCompact) {
-    stmts = stmts.map(compactStatement);
-    setStmts = setStmts.map(compactStatement);
-  }
+  const render = (s) => {
+    let tokens = tokenize(s);
+    tokens = applyCapitalization(tokens, capitalization);
+    tokens = applyAliases(tokens, aliases);
+    if (layout === 'oneLine') return renderInline(tokens);
+    return renderLayout(tokens, layout, 0, alignment);
+  };
 
-  const all = [...setStmts, ...stmts].map((s) => s.replace(/;\s*$/, ''));
-  return all.join(';\n');
+  return [...setStmts, ...stmts].map(render).join(';\n');
 }

@@ -2,8 +2,9 @@
 
 Browser SQL formatter for Google Sheets — live at **formatsql.lvh.dev**.
 
-Paste a query, toggle transforms (compact / variabilize `{{ref|fmt}}` / simplify
-`DATE_FORMAT`), click the output to copy. Runs entirely client-side.
+Paste a query, pick a layout (single line / keywords per line / keywords per
+line + subqueries), alignment, capitalization, alias, and variable options, then
+click the output to copy. Runs entirely client-side.
 
 ## Layout
 
