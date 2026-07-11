@@ -1,0 +1,33 @@
+# FormatSQL — static SPA (formatsql.lvh.dev), deployed via Dockhand Git stack.
+#
+# Build context is this directory (web/). The pure transform logic lives in
+# src/lib/prettify.js and is bundled into the SPA by Vite (also shared with
+# the CLI at ../../tools/prettify-sql.mjs).
+#
+# Prerequisites:
+#   - External network 'traefik' (reverse proxy)
+#   - DNS: formatsql.lvh.dev -> NAS (Traefik handles TLS via the 'letencrypt'
+#     cert resolver, same as the other *.lvh.dev services)
+
+services:
+  formatsql-lvh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: formatsql-lvh:latest
+    container_name: formatsql-lvh
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.formatsql-lvh.rule=Host(`formatsql.lvh.dev`)"
+      - "traefik.http.routers.formatsql-lvh.entrypoints=websecure"
+      - "traefik.http.routers.formatsql-lvh.tls=true"
+      - "traefik.http.routers.formatsql-lvh.tls.certresolver=letencrypt"
+      - "traefik.http.services.formatsql-lvh.loadbalancer.server.port=80"
+    restart: unless-stopped
+
+networks:
+  traefik:
+    name: traefik
+    external: true

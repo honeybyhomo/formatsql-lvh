@@ -1,0 +1,43 @@
+:root {
+  /* Mono font stack. Once you've picked a Nerd Font, add an @font-face below
+     loading its self-hosted .woff2 and put its family name first here. */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono',
+    Consolas, 'Liberation Mono', Menlo, monospace;
+  --bg: #0f1115;
+  --panel: #161a21;
+  --panel-2: #1c212b;
+  --border: #2a313d;
+  --text: #e6e9ef;
+  --muted: #8b93a4;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* @font-face for a self-hosted Nerd Font goes here, e.g.:
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  src: url('/assets/JetBrainsMonoNerdFont-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+}
+*/
