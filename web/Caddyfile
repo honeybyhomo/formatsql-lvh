@@ -1,0 +1,7 @@
+# Caddy serves the SPA over plain HTTP on :80; Traefik terminates TLS upstream.
+# :80 disables Caddy's automatic HTTPS (not needed behind Traefik).
+:80 {
+	root * /srv
+	try_files {path} /index.html
+	file_server
+}
