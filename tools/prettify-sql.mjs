@@ -15,8 +15,10 @@
 //   --keywords                         uppercase SQL keywords (+ function names)
 //   --as / --no-as                     enforce / strip column & table aliases
 //   --variables repeated|all           hoist {{ref|fmt}} into SET @var = ...
+//   --unwrap-dateformat                 DATE_FORMAT(col, '%Y-%m-%d') → col
 //   --pretty                           convenience: per-keyword-sub + aligned +
-//                                      keywords + as + variables repeated
+//                                      keywords + as + variables repeated +
+//                                      unwrap-dateformat
 //
 // The pure transform logic lives in web/src/lib/prettify.js and is shared
 // with the web app (formatsql.lvh.dev).
@@ -39,6 +41,7 @@ const opts = has('--pretty')
       capitalization: 'keywords',
       aliases: 'as',
       variables: 'repeated',
+      unwrapDateFormat: true,
     }
   : {
       layout: has('--per-keyword-sub')
@@ -50,6 +53,7 @@ const opts = has('--pretty')
       capitalization: has('--keywords') ? 'keywords' : 'unchanged',
       aliases: has('--no-as') ? 'bare' : has('--as') ? 'as' : 'unchanged',
       variables: val('--variables') === 'all' ? 'all' : val('--variables') === 'repeated' ? 'repeated' : 'none',
+      unwrapDateFormat: has('--unwrap-dateformat'),
     };
 
 // ---------- I/O ----------

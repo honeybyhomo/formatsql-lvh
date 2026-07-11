@@ -13,6 +13,7 @@ const options = reactive({
   capitalization: 'unchanged', // 'unchanged' | 'keywords'
   aliases: 'unchanged', // 'unchanged' | 'as' | 'bare'
   variables: 'repeated', // 'none' | 'repeated' (>=2) | 'all'
+  unwrapDateFormat: true, // DATE_FORMAT(d,'%Y-%m-%d') -> d
 })
 
 const OPT_KEY = 'formatsql:options:v2'
@@ -63,6 +64,7 @@ function preset(name) {
       capitalization: 'keywords',
       aliases: 'as',
       variables: 'repeated',
+      unwrapDateFormat: true,
     })
   } else if (name === 'reset') {
     Object.assign(options, {
@@ -71,6 +73,7 @@ function preset(name) {
       capitalization: 'unchanged',
       aliases: 'unchanged',
       variables: 'none',
+      unwrapDateFormat: false,
     })
   }
 }
@@ -115,6 +118,13 @@ function preset(name) {
         <label><input type="radio" value="none" v-model="options.variables" /> None</label>
         <label><input type="radio" value="repeated" v-model="options.variables" /> Repeated ≥2</label>
         <label><input type="radio" value="all" v-model="options.variables" /> All</label>
+      </div>
+
+      <div class="opt-group">
+        <span class="opt-title">Simplify</span>
+        <label title="DATE_FORMAT(col, '%Y-%m-%d') → col (assumes the column is DATE-typed)">
+          <input type="checkbox" v-model="options.unwrapDateFormat" /> Unwrap DATE_FORMAT
+        </label>
       </div>
 
       <span class="presets">
@@ -197,6 +207,11 @@ function preset(name) {
   font-size: 13px;
 }
 .opt-group input[type='radio'] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+.opt-group input[type='checkbox'] {
   accent-color: var(--accent);
   width: 14px;
   height: 14px;

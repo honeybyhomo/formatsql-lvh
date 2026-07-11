@@ -70,16 +70,20 @@ the renderers, so clause analysis never skips spaces.
   `LIMIT`, `UNION [ALL]`, …). Multi-word phrases are matched as a unit.
 - `variabilize(statements, threshold)` — hoist `{{ref|fmt}}` used ≥ threshold
   times into `SET @var = …;` (snake_case var name from the ref).
+- `applyDateFormat(tokens, on)` — unwrap `DATE_FORMAT(expr, '%Y-%m-%d')` →
+  `expr` (just the column), assuming the GS API already renders DATE columns
+  as ISO dates. Only the exact `%Y-%m-%d` format; word-boundary guarded.
 - `prettify(sql, opts)` — orchestrator.
-  `opts: { layout, alignment, capitalization, aliases, variables }` (see
-  `UI Conventions` below for the values of each). Defaults: `perKeyword` /
-  `off` / `unchanged` / `unchanged` / `none`.
+  `opts: { layout, alignment, capitalization, aliases, variables,
+  unwrapDateFormat }` (see `UI Conventions` below for the values of each).
+  Defaults: `perKeyword` / `off` / `unchanged` / `unchanged` / `none` / `false`.
 
 All transforms are quote- **and** paren-aware, so `;`, `DATE_FORMAT`, and
 whitespace inside string literals are never touched.
 
-> The old `compactStatement` / `simplifyDateFormat` (DATE_FORMAT → DATE())
-> transforms were removed. DATE_FORMAT is now always left untouched.
+> The old `DATE_FORMAT(x,'%Y-%m-%d')` → `DATE(x)` rewrite was removed. The
+> DATE_FORMAT option now unwraps to the bare column instead of coercing with
+> `DATE()` (which changed the return type).
 
 ## Build / Dev Commands
 
@@ -126,6 +130,8 @@ buttons. Each group maps 1:1 to a field of the `prettify` `opts` object:
   FROM/JOIN table refs; it refuses to guess after operators, after `DISTINCT`,
   on single tokens, or where `AS` is already present.
 - **Variables** → `variables`: `none` · `repeated` (≥2 uses) · `all`.
+- **Simplify** (checkbox) → `unwrapDateFormat`: unwrap
+  `DATE_FORMAT(col, '%Y-%m-%d')` → `col` (assumes a DATE-typed column).
 - **Buttons** → presets (`Pretty`, `Reset`) and click-to-copy on the output.
 
 Selection + last input are persisted to `localStorage` under

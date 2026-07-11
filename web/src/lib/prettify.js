@@ -289,6 +289,37 @@ function applyCapitalization(tokens, mode) {
   });
 }
 
+// Unwrap DATE_FORMAT(expr, '%Y-%m-%d') -> expr (just the column). Assumes the GS
+// API already renders DATE columns as ISO dates, so the function is redundant.
+// Only the exact %Y-%m-%d format; word-boundary guarded (XDATE_FORMAT untouched).
+function applyDateFormat(tokens, on) {
+  if (!on) return tokens;
+  const out = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    const isDF = t.type === 'word' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(t.value) &&
+      t.value.toLowerCase() === 'date_format';
+    if (isDF && tokens[i + 1] && tokens[i + 1].value === '(') {
+      const openIdx = i + 1;
+      const closeIdx = matchingClose(tokens, openIdx);
+      const inner = tokens.slice(openIdx + 1, closeIdx);
+      const argRanges = splitCommaRanges(inner, 0, inner.length);
+      if (argRanges.length === 2) {
+        const fmt = inner.slice(argRanges[1][0], argRanges[1][1]).map((x) => x.value).join('').trim();
+        if (fmt.replace(/^['"`]|['"`]$/g, '') === '%Y-%m-%d') {
+          out.push(...inner.slice(argRanges[0][0], argRanges[0][1]));
+          i = closeIdx + 1;
+          continue;
+        }
+      }
+    }
+    out.push(t);
+    i++;
+  }
+  return out;
+}
+
 // Index of a trailing alias in a SELECT-list item spanning [s, e), or -1.
 function aliasCandidateAt(tokens, s, e) {
   const last = e - 1;
@@ -520,11 +551,12 @@ export function variabilize(statements, threshold) {
 // ---------------------------------------------------------------------------
 
 // opts: {
-//   layout:         'oneLine' | 'perKeyword' | 'perKeywordSub',  // default perKeyword
-//   alignment:      'off' | 'aligned',                            // default off
-//   capitalization: 'unchanged' | 'keywords',                     // default unchanged
-//   aliases:        'unchanged' | 'as' | 'bare',                  // default unchanged
-//   variables:      'none' | 'repeated' | 'all',                  // default none
+//   layout:           'oneLine' | 'perKeyword' | 'perKeywordSub',  // default perKeyword
+//   alignment:        'off' | 'aligned',                            // default off
+//   capitalization:   'unchanged' | 'keywords',                     // default unchanged
+//   aliases:          'unchanged' | 'as' | 'bare',                  // default unchanged
+//   variables:        'none' | 'repeated' | 'all',                  // default none
+//   unwrapDateFormat: boolean,                                       // default false
 // }
 export function prettify(sql, opts = {}) {
   const layout = opts.layout || 'perKeyword';
@@ -532,6 +564,7 @@ export function prettify(sql, opts = {}) {
   const capitalization = opts.capitalization || 'unchanged';
   const aliases = opts.aliases || 'unchanged';
   const variables = opts.variables || 'none';
+  const unwrapDateFormat = !!opts.unwrapDateFormat;
 
   let stmts = splitStatements(sql);
 
@@ -545,6 +578,7 @@ export function prettify(sql, opts = {}) {
 
   const render = (s) => {
     let tokens = tokenize(s);
+    tokens = applyDateFormat(tokens, unwrapDateFormat);
     tokens = applyCapitalization(tokens, capitalization);
     tokens = applyAliases(tokens, aliases);
     if (layout === 'oneLine') return renderInline(tokens);
