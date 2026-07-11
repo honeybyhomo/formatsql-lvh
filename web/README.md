@@ -1,7 +1,8 @@
 # FormatSQL
 
 Browser UI for the SQL prettifier at **formatsql.lvh.dev**. Paste a query on
-the left, toggle transforms, click the output to copy.
+the left, choose your layout / alignment / case / alias / variable options,
+click the output to copy.
 
 Shares its pure transform logic with the CLI — both import `src/lib/prettify.js`.
 
