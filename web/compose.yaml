@@ -6,8 +6,8 @@
 #
 # Prerequisites:
 #   - External network 'traefik' (reverse proxy)
-#   - DNS: formatsql.lvh.dev -> NAS (Traefik handles TLS via the 'letencrypt'
-#     cert resolver, same as the other *.lvh.dev services)
+#   - DNS: formatsql.lvh.dev -> NAS (Traefik handles TLS via the 'letencrypt-lvh'
+#     cert resolver, HTTP challenge — lvh.dev is on a separate Cloudflare account)
 
 services:
   formatsql-lvh:
@@ -23,7 +23,7 @@ services:
       - "traefik.http.routers.formatsql-lvh.rule=Host(`formatsql.lvh.dev`)"
       - "traefik.http.routers.formatsql-lvh.entrypoints=websecure"
       - "traefik.http.routers.formatsql-lvh.tls=true"
-      - "traefik.http.routers.formatsql-lvh.tls.certresolver=letencrypt"
+      - "traefik.http.routers.formatsql-lvh.tls.certresolver=letencrypt-lvh"
       - "traefik.http.services.formatsql-lvh.loadbalancer.server.port=80"
     restart: unless-stopped
 
