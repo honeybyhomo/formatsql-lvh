@@ -131,6 +131,36 @@ export function simplifyDateFormat(stmt) {
   return out;
 }
 
+// Strip the quotes around '@var' / "@var" / `@var` when the ENTIRE quoted
+// content is a single MySQL user variable (e.g. '@cel_data_date_to' ->
+// @cel_data_date_to). Only '@' + identifier chars ([A-Za-z0-9_.$]) qualify, so
+// genuine string literals like 'Date' or 'sent @ noon' are left untouched.
+// Uses the same naive quote model as the rest of this module (the next
+// identical quote char closes the literal).
+export function unwrapQuotedVariables(stmt) {
+  let out = '';
+  let i = 0;
+  while (i < stmt.length) {
+    const c = stmt[i];
+    if (!QUOTES.includes(c)) {
+      out += c;
+      i++;
+      continue;
+    }
+    // c opens a quoted region — find the matching close quote.
+    let j = i + 1;
+    while (j < stmt.length && stmt[j] !== c) j++;
+    if (j >= stmt.length) {
+      out += stmt.slice(i); // unterminated quote — emit verbatim and stop
+      break;
+    }
+    const inner = stmt.slice(i + 1, j);
+    out += /^@[A-Za-z0-9_.$]+$/.test(inner) ? inner : stmt.slice(i, j + 1);
+    i = j + 1;
+  }
+  return out;
+}
+
 // Derive a snake_case MySQL variable name from a placeholder ref.
 function toVarName(ref) {
   let s = ref.replace(/[^a-zA-Z0-9]+/g, '_')
@@ -184,7 +214,8 @@ export function variabilize(statements, threshold) {
 }
 
 // Orchestrator: apply the selected transforms to a SQL string.
-// opts: { compact, variabilize, variabilizeAll, simplifyDateFormat }
+// opts: { compact, variabilize, variabilizeAll, simplifyDateFormat,
+//         unwrapQuotedVariables }
 export function prettify(sql, opts = {}) {
   // Locals are prefixed do* to avoid shadowing the transform functions of the
   // same name (variabilize, simplifyDateFormat).
@@ -192,6 +223,7 @@ export function prettify(sql, opts = {}) {
   const doVariabilize = !!opts.variabilize;
   const variabilizeAll = !!opts.variabilizeAll;
   const doSimplify = !!opts.simplifyDateFormat;
+  const doUnwrap = opts.unwrapQuotedVariables !== false; // default true
 
   let stmts = splitStatements(sql);
 
@@ -205,6 +237,13 @@ export function prettify(sql, opts = {}) {
     const v = variabilize(stmts, threshold);
     stmts = v.statements;
     setStmts = v.setStmts;
+  }
+
+  // Run after variabilize so it also catches quoted placeholders that were
+  // just turned into quoted '@var' references (e.g. '{{ref|Date}}' -> '@var').
+  if (doUnwrap) {
+    stmts = stmts.map(unwrapQuotedVariables);
+    setStmts = setStmts.map(unwrapQuotedVariables);
   }
 
   if (doCompact) {

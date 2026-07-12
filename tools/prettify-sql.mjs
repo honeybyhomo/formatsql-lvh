@@ -16,7 +16,8 @@
 //   --variabilize-all      hoist every {{ref|fmt}} (even single-use)
 //   --simplify-dateformat  DATE_FORMAT(x,'%Y-%m-%d') -> DATE(x)
 //                          (safe once the API formats DATE columns cleanly)
-//   --all                  compact + variabilize + simplify-dateformat
+//   --unquote-vars         strip quotes off '@var' refs ('@x' -> @x)
+//   --all                  compact + variabilize + simplify-dateformat + unquote-vars
 //
 // The pure transform logic lives in web/src/lib/prettify.js and is shared
 // with the web app (formatsql.lvh.dev).
@@ -31,6 +32,7 @@ const opts = {
   variabilize: argv.includes('--variabilize') || argv.includes('--variabilize-all') || argv.includes('--all'),
   variabilizeAll: argv.includes('--variabilize-all'),
   simplifyDateFormat: argv.includes('--simplify-dateformat') || argv.includes('--all'),
+  unwrapQuotedVariables: argv.includes('--unquote-vars') || argv.includes('--all'),
 };
 
 // ---------- I/O ----------

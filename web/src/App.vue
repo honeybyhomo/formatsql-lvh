@@ -11,6 +11,7 @@ const options = reactive({
   variabilize: true,
   variabilizeAll: false,
   simplifyDateFormat: true,
+  unwrapQuotedVariables: true,
 })
 
 const OPT_KEY = 'formatsql:options'
@@ -60,6 +61,7 @@ function preset(name) {
       variabilize: true,
       variabilizeAll: false,
       simplifyDateFormat: true,
+      unwrapQuotedVariables: true,
     })
   } else if (name === 'none') {
     Object.assign(options, {
@@ -67,6 +69,7 @@ function preset(name) {
       variabilize: false,
       variabilizeAll: false,
       simplifyDateFormat: false,
+      unwrapQuotedVariables: false,
     })
   }
 }
@@ -91,6 +94,7 @@ function preset(name) {
         Variabilize all
       </label>
       <label><input type="checkbox" v-model="options.simplifyDateFormat" /> Simplify DATE_FORMAT</label>
+      <label><input type="checkbox" v-model="options.unwrapQuotedVariables" /> Unquote '@vars'</label>
       <span class="presets">
         <button @click="preset('all')">All</button>
         <button @click="preset('none')">Reset</button>

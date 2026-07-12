@@ -61,11 +61,14 @@ Vue app and the CLI. **Change transforms here once; both surfaces update.**
 - `compactStatement(stmt)` — collapse whitespace (quote-aware), one line.
 - `simplifyDateFormat(stmt)` — `DATE_FORMAT(x,'%Y-%m-%d')` → `DATE(x)`
   (paren/quote-aware, word-boundary guarded; only the exact `%Y-%m-%d` format).
+- `unwrapQuotedVariables(stmt)` — strip quotes off a quoted MySQL user
+  variable when the **entire** literal is one var (`'@foo'` → `@foo`). Leaves
+  real strings like `'Date'` or `'@foo bar'` alone. Quote-aware.
 - `variabilize(statements, threshold)` — hoist `{{ref|fmt}}` used ≥ threshold
   times into `SET @var = …;` (snake_case var name from the ref).
 - `prettify(sql, opts)` — orchestrator. `opts: { compact, variabilize,
-  variabilizeAll, simplifyDateFormat }`. Note: locals are named `do*` to avoid
-  shadowing the transform functions of the same name.
+  variabilizeAll, simplifyDateFormat, unwrapQuotedVariables }`. Note: locals
+  are named `do*` to avoid shadowing the transform functions of the same name.
 
 All transforms are quote- **and** paren-aware, so `;`, `DATE_FORMAT`, and
 whitespace inside string literals are never touched.
