@@ -60,7 +60,10 @@ Vue app and the CLI. **Change transforms here once; both surfaces update.**
 Pipeline: `splitStatements → variabilize → tokenize → capitalize → aliases →
 layout`. A small SQL **tokenizer** (quote / paren / comment / `{{placeholder}}`
 / `@param` aware) powers everything; whitespace is dropped and re-flowed by
-the renderers, so clause analysis never skips spaces.
+the renderers, so clause analysis never skips spaces. Line comments (`--`,
+`#`) are always rendered on their own line — they're line-terminated, so
+leaving one inline would comment out the tokens that followed it on the next
+source line (block `/* */` comments are self-terminating and stay inline).
 
 - `splitStatements(sql)` — quote-aware split on `;`.
 - `tokenize(sql)` → significant tokens (strings, backticks, placeholders,

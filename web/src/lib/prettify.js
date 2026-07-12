@@ -261,15 +261,21 @@ function needSpace(prev, next) {
   return true;
 }
 
-function renderInline(tokens) {
-  let out = '';
-  let prev = null;
-  for (const t of tokens) {
-    if (needSpace(prev, t)) out += ' ';
-    out += t.value;
-    prev = t;
-  }
-  return out;
+// Is this a SQL line comment (-- … or # …)? These run to end-of-line, so they
+// can't stay inline once we re-flow whitespace — left inline, a line comment
+// would comment out the tokens that originally followed it on the next line.
+// Block comments (/* … */) are self-terminating and need no special handling.
+function isLineComment(t) {
+  return !!t && t.type === 'comment' && /^(--|#)/.test(t.value);
+}
+
+// Separator to emit before `cur`, given the previously emitted token. Line
+// comments always sit on their own line, so a newline is forced before and
+// after one. `contPad` indents those comment-driven continuation lines.
+function tokenSep(prev, cur, contPad) {
+  if (!prev) return '';
+  if (isLineComment(prev) || isLineComment(cur)) return '\n' + contPad;
+  return needSpace(prev, cur) ? ' ' : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -427,28 +433,26 @@ function applyAliases(tokens, mode) {
 // ---------------------------------------------------------------------------
 
 // Render a clause body. In perKeywordSub mode, (SELECT…) subqueries expand to
-// indented, keyword-broken blocks; otherwise everything stays inline.
-function renderSegmentBody(body, mode, indentLevel, alignment) {
-  if (mode !== 'perKeywordSub') return renderInline(body);
-
+// indented, keyword-broken blocks; line comments (--, #) go on their own line.
+function renderBody(tokens, mode, indentLevel, alignment) {
+  const pad = indentFn(indentLevel);
+  const contPad = indentFn(indentLevel + 1);
   let out = '';
   let prev = null;
   let i = 0;
-  const n = body.length;
+  const n = tokens.length;
   while (i < n) {
-    const t = body[i];
-    if (t.value === '(' && isOpenSubquery(body, i)) {
-      const close = matchingClose(body, i);
-      const inner = body.slice(i + 1, close);
-      if (needSpace(prev, t)) out += ' ';
-      out += '(\n' +
-        renderLayout(inner, mode, indentLevel + 1, alignment) + '\n' +
-        indentFn(indentLevel) + ')';
+    const t = tokens[i];
+    if (mode === 'perKeywordSub' && t.value === '(' && isOpenSubquery(tokens, i)) {
+      const close = matchingClose(tokens, i);
+      const inner = tokens.slice(i + 1, close);
+      out += tokenSep(prev, t, contPad);
+      out += '(\n' + renderLayout(inner, mode, indentLevel + 1, alignment) + '\n' + pad + ')';
       prev = { type: 'op', value: ')' };
       i = close + 1;
       continue;
     }
-    if (needSpace(prev, t)) out += ' ';
+    out += tokenSep(prev, t, contPad);
     out += t.value;
     prev = t;
     i++;
@@ -464,7 +468,7 @@ function renderLayout(tokens, mode, indentLevel, alignment) {
       ? tokens.slice(r.headStart, r.headStart + r.headLen).map((t) => t.value).join(' ')
       : '';
     const body = tokens.slice(r.bodyStart, r.bodyEnd);
-    return { headStr, tailStr: renderSegmentBody(body, mode, indentLevel, alignment) };
+    return { headStr, tailStr: renderBody(body, mode, indentLevel, alignment) };
   });
 
   const headLens = lines.filter((l) => l.headStr).map((l) => l.headStr.length);
@@ -601,7 +605,7 @@ export function prettify(sql, opts = {}) {
     tokens = applyDateFormat(tokens, unwrapDateFormat);
     tokens = applyCapitalization(tokens, capitalization);
     tokens = applyAliases(tokens, aliases);
-    if (layout === 'oneLine') return renderInline(tokens);
+    if (layout === 'oneLine') return renderBody(tokens, layout, 0, alignment);
     return renderLayout(tokens, layout, 0, alignment);
   };
 
