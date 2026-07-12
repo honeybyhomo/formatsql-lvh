@@ -73,10 +73,16 @@ the renderers, so clause analysis never skips spaces.
 - `applyDateFormat(tokens, on)` — unwrap `DATE_FORMAT(expr, '%Y-%m-%d')` →
   `expr` (just the column), assuming the GS API already renders DATE columns
   as ISO dates. Only the exact `%Y-%m-%d` format; word-boundary guarded.
+- `applyUnwrapVariables(tokens, on)` — strip the quotes off a quoted literal
+  whose **entire** content is one MySQL user variable (`'@foo'` / `"@foo"` /
+  `` `@foo` `` → `@foo`). Real literals (`'Date'`, `'sent @ noon'`) are left
+  alone. Runs after `tokenize` so it also catches `'{{ref|fmt}}'` placeholders
+  that `variabilize` just turned into `'@var'`.
 - `prettify(sql, opts)` — orchestrator.
   `opts: { layout, alignment, capitalization, aliases, variables,
-  unwrapDateFormat }` (see `UI Conventions` below for the values of each).
-  Defaults: `perKeyword` / `off` / `unchanged` / `unchanged` / `none` / `false`.
+  unwrapDateFormat, unwrapVariables }` (see `UI Conventions` below for the
+  values of each).
+  Defaults: `perKeyword` / `off` / `unchanged` / `unchanged` / `none` / `false` / `false`.
 
 All transforms are quote- **and** paren-aware, so `;`, `DATE_FORMAT`, and
 whitespace inside string literals are never touched.
@@ -131,7 +137,8 @@ buttons. Each group maps 1:1 to a field of the `prettify` `opts` object:
   on single tokens, or where `AS` is already present.
 - **Variables** → `variables`: `none` · `repeated` (≥2 uses) · `all`.
 - **Simplify** (checkbox) → `unwrapDateFormat`: unwrap
-  `DATE_FORMAT(col, '%Y-%m-%d')` → `col` (assumes a DATE-typed column).
+  `DATE_FORMAT(col, '%Y-%m-%d')` → `col` (assumes a DATE-typed column);
+  `unwrapVariables`: strip quotes off a lone `'@var'` literal.
 - **Buttons** → presets (`Pretty`, `Reset`) and click-to-copy on the output.
 
 Selection + last input are persisted to `localStorage` under

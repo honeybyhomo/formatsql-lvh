@@ -289,6 +289,23 @@ function applyCapitalization(tokens, mode) {
   });
 }
 
+// Unwrap a quoted '@var' literal into a bare @param reference, but only when
+// the ENTIRE quoted content is a single MySQL user variable. Genuine string
+// literals ('Date', 'sent @ noon') and backticked identifiers (`col`) are left
+// untouched. Operates on token arrays.
+function applyUnwrapVariables(tokens, on) {
+  if (!on) return tokens;
+  return tokens.map((t) => {
+    if (t.type !== 'string' && t.type !== 'backtick') return t;
+    const v = t.value;
+    const q = v[0];
+    // Only when the literal is properly closed (same quote char at both ends).
+    if (v.length < 3 || v[v.length - 1] !== q) return t;
+    const inner = v.slice(1, -1);
+    return /^@[A-Za-z0-9_.$]+$/.test(inner) ? { type: 'param', value: inner } : t;
+  });
+}
+
 // Unwrap DATE_FORMAT(expr, '%Y-%m-%d') -> expr (just the column). Assumes the GS
 // API already renders DATE columns as ISO dates, so the function is redundant.
 // Only the exact %Y-%m-%d format; word-boundary guarded (XDATE_FORMAT untouched).
@@ -557,6 +574,7 @@ export function variabilize(statements, threshold) {
 //   aliases:          'unchanged' | 'as' | 'bare',                  // default unchanged
 //   variables:        'none' | 'repeated' | 'all',                  // default none
 //   unwrapDateFormat: boolean,                                       // default false
+//   unwrapVariables:  boolean,                                       // default false
 // }
 export function prettify(sql, opts = {}) {
   const layout = opts.layout || 'perKeyword';
@@ -565,6 +583,7 @@ export function prettify(sql, opts = {}) {
   const aliases = opts.aliases || 'unchanged';
   const variables = opts.variables || 'none';
   const unwrapDateFormat = !!opts.unwrapDateFormat;
+  const unwrapVariables = !!opts.unwrapVariables;
 
   let stmts = splitStatements(sql);
 
@@ -578,6 +597,7 @@ export function prettify(sql, opts = {}) {
 
   const render = (s) => {
     let tokens = tokenize(s);
+    tokens = applyUnwrapVariables(tokens, unwrapVariables);
     tokens = applyDateFormat(tokens, unwrapDateFormat);
     tokens = applyCapitalization(tokens, capitalization);
     tokens = applyAliases(tokens, aliases);

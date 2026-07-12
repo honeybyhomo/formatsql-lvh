@@ -16,9 +16,10 @@
 //   --as / --no-as                     enforce / strip column & table aliases
 //   --variables repeated|all           hoist {{ref|fmt}} into SET @var = ...
 //   --unwrap-dateformat                 DATE_FORMAT(col, '%Y-%m-%d') → col
+//   --unwrap-variables                  strip quotes off a lone '@var' literal ('@x' → @x)
 //   --pretty                           convenience: per-keyword-sub + aligned +
 //                                      keywords + as + variables repeated +
-//                                      unwrap-dateformat
+//                                      unwrap-dateformat + unwrap-variables
 //
 // The pure transform logic lives in web/src/lib/prettify.js and is shared
 // with the web app (formatsql.lvh.dev).
@@ -42,6 +43,7 @@ const opts = has('--pretty')
       aliases: 'as',
       variables: 'repeated',
       unwrapDateFormat: true,
+      unwrapVariables: true,
     }
   : {
       layout: has('--per-keyword-sub')
@@ -54,6 +56,7 @@ const opts = has('--pretty')
       aliases: has('--no-as') ? 'bare' : has('--as') ? 'as' : 'unchanged',
       variables: val('--variables') === 'all' ? 'all' : val('--variables') === 'repeated' ? 'repeated' : 'none',
       unwrapDateFormat: has('--unwrap-dateformat'),
+      unwrapVariables: has('--unwrap-variables'),
     };
 
 // ---------- I/O ----------

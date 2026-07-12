@@ -14,6 +14,7 @@ const options = reactive({
   aliases: 'unchanged', // 'unchanged' | 'as' | 'bare'
   variables: 'repeated', // 'none' | 'repeated' (>=2) | 'all'
   unwrapDateFormat: true, // DATE_FORMAT(d,'%Y-%m-%d') -> d
+  unwrapVariables: true, // '@var' -> @var (only when the whole literal is one var)
 })
 
 const OPT_KEY = 'formatsql:options:v2'
@@ -65,6 +66,7 @@ function preset(name) {
       aliases: 'as',
       variables: 'repeated',
       unwrapDateFormat: true,
+      unwrapVariables: true,
     })
   } else if (name === 'reset') {
     Object.assign(options, {
@@ -74,6 +76,7 @@ function preset(name) {
       aliases: 'unchanged',
       variables: 'none',
       unwrapDateFormat: false,
+      unwrapVariables: false,
     })
   }
 }
@@ -124,6 +127,9 @@ function preset(name) {
         <span class="opt-title">Simplify</span>
         <label title="DATE_FORMAT(col, '%Y-%m-%d') → col (assumes the column is DATE-typed)">
           <input type="checkbox" v-model="options.unwrapDateFormat" /> Unwrap DATE_FORMAT
+        </label>
+        <label title="Strip quotes off a variable literal whose entire content is one @var">
+          <input type="checkbox" v-model="options.unwrapVariables" /> Unwrap '@vars'
         </label>
       </div>
 
